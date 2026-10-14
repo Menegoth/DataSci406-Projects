@@ -1,0 +1,832 @@
+---
+title: "Module 1 Project: How Long Is a Perch?"
+author: "Antonio Monteiro, amonteir"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(288942)
+library(tidyverse)
+```
+
+\newcommand{\E}[1]{\text{E}\left(#1\right)}
+\newcommand{\Var}[1]{\text{Var}\left(#1\right)}
+\newcommand{\ind}{\mathbf{1}}
+
+# The setting
+
+The University of Helsinki recorded 159 fish caught in lake Laengelmavesi,
+including 56 perch. We will model the **length of a perch** (the `length1`
+measurement, in cm).
+
+```{r}
+fish <- read.csv("../../data/fish.csv")
+perch <- filter(fish, species == 7)
+ggplot(perch, aes(x = length1)) + geom_histogram(bins = 10)
+```
+
+Our model for perch length is supported on $[0, \theta]$, with $\theta = 50$
+cm taken as the largest a perch could plausibly be:
+
+**The model**: a **scaled Beta**: $X = 50 B$ with
+$B \sim \text{Beta}(4, 4)$, so the density is
+$$f(x) = \frac{1}{50} \, f_B(x / 50), \quad 0 \le x \le 50,$$
+where $f_B$ is the Beta(4, 4) density. In general the
+Beta$(\alpha, \beta)$ density on $[0, 1]$ is
+$$f_B(u) = \frac{1}{\mathrm{B}(\alpha, \beta)}\,
+  u^{\alpha - 1} (1 - u)^{\beta - 1}, \qquad 0 \le u \le 1,$$
+where $\mathrm{B}(\alpha,\beta) = \Gamma(\alpha)\Gamma(\beta)/\Gamma(\alpha+\beta)$
+is the **beta function** --- whatever constant makes the thing integrate to
+one. It does not depend on $u$, which is why it drops out of most of what
+follows and matters in exactly one place, C.2.
+
+With $\alpha = \beta = 4$ the density is symmetric, with its peak at 25 cm:
+
+```{r}
+fmod <- function(x) { dbeta(x / 50, 4, 4) / 50 }
+curve(fmod(x), from = -1, to = 55)
+```
+
+The shape parameter here is a *guess*, not a fact. Part C estimates it from
+the data and Part D builds a confidence interval for it, so by the end you
+will know how much of a guess it was.
+
+Reminder: this document will be used on the exam. For any question make sure to display any requested output. If you use any AI assistance in implementing the R code, be prepared to explain how the implementation works.
+
+# Part A: Monte Carlo integration
+
+### A.1
+
+Let $B$ be any random variable with CDF $F_B$ and density $f_B$, and let
+$X = 50 B$. **Prove** that
+$$F_X(x) = F_B(x / 50) \qquad \text{and} \qquad
+f_X(x) = \frac{1}{50} f_B(x / 50).$$
+
+Then **compute** the exact $F(20) = P(X \le 20)$ using `pbeta`.
+We will treat this as the exact value for the rest of the project.
+
+Proof:
+
+$F_X(x) = P(X <= x) = P(50B <= x) = P(B <= \frac{x}{50}) = F_B(\frac{x}{50})$
+
+```{r}
+#F(20)
+F_20_exact <- pbeta(20/ 50, 4, 4)
+F_20_exact
+```
+
+
+### A.2
+
+Now estimate the same quantity by Monte Carlo, pretending A.1 were not
+available:
+$$F(20) = \int_0^{20} f(x) \, dx = \E{20 f(V)}, \quad V \sim U(0, 20).$$
+
+Use 10,000 uniform draws. Report the estimate and a 95\% confidence
+interval from `t.test`.
+
+```{r}
+v_a2 <- runif(10000, min = 0, max = 20)
+v_a2_draws <- 20 * fmod(v_a2) # times 20 because of area
+t.test(v_a2_draws)
+```
+
+
+### A.3
+
+Estimate the model's mean perch length,
+$$\E{X} = \int_0^{50} x f(x) \, dx,$$
+with a $U(0, 50)$ envelope and 10,000 draws. Report a 95\% confidence
+interval and check against numerical integration:
+
+```{r}
+integrate(function(x) x * fmod(x), 0, 50)
+```
+
+The model is symmetric about 25, so $\E{X}$ is also available exactly in one
+line. Give it, and set all three numbers side by side.
+
+```{r}
+v_a3 <- runif(10000, min = 0, max = 50)
+v_a3_draws <- 50 * v_a3 * fmod(v_a3)
+estimate_v_a3 <- t.test(v_a3_draws)$conf.int
+
+num_int <- integrate(function(x) x * fmod(x), 0, 50)$value
+
+c(Exact_Mean = 25, Numerical_Integration = num_int, CI = estimate_v_a3)
+```
+
+
+### A.4
+
+Compare model to data: report the exact model probability $F(20)$ from A.1
+next to the observed fraction of the 56 perch with `length1` $\le 20$.
+
+```{r}
+frac <- mean(perch$length1 <= 20)
+
+c(Model_Exact = F_20_exact, Data_Observed = frac)
+```
+
+
+### A.5
+
+A joint quantity: two perch are caught independently, both following Model
+B. Estimate the probability their **combined** length exceeds 70 cm,
+$$P(X_1 + X_2 > 70)
+= \int_0^{50}\!\!\int_0^{50} \ind(x_1 + x_2 > 70)\, f(x_1) f(x_2)
+\, dx_1 \, dx_2,$$
+using independent pairs $V_1, V_2 \sim U(0, 50)$ and the
+multiply-and-divide recipe (careful: the joint envelope density is
+$1/50^2$). Use 100,000 pairs and report a 95\% confidence interval. You
+will check this answer in Part C.
+
+```{r}
+v1_a5 <- runif(100000, 0, 50)
+v2_a5 <- runif(100000, 0, 50)
+
+joint_draws_a5 <- 2500 * ((v1_a5 + v2_a5) > 70) * fmod(v1_a5) * fmod(v2_a5)
+t.test(joint_draws_a5)
+
+```
+
+
+# Part B: variance reduction
+
+### B.1
+
+Antithetic variables for the A.2 estimator. The model has its mode at 25, so
+on $[0, 20]$ the density $f$ is strictly increasing (show this with a plot
+or a one-line argument), and therefore $h(v) = 20 f(v)$ is monotone and the
+pairs $(V, 20 - V)$ are negatively correlated.
+
+Re-estimate $F(20)$ using 5,000 uniform draws $V_i$ paired with their
+antithetic partners $20 - V_i$ (10,000 function evaluations total, same as
+A.2). Report the estimate, the estimated variance of this estimator and of
+the A.2 estimator, and the percent variance reduction.
+
+```{r}
+# prove monotonic with plot
+h <- function(v) { 20 * fmod(v) }
+curve(h(x), from = 0, to = 20, 
+      xlab = "v", 
+      ylab = "h(v) = 20 * f(v)", 
+      main = "Monotonicity of h(v) on [0, 20]",
+      col = "blue", lwd = 2)
+
+v_b1_pairs <- runif(5000, 0, 20)
+v_b1_anti <- 20 - v_b1_pairs
+
+# pairwise averages
+w_i <- h((v_b1_pairs) + h(v_b1_anti)) / 2
+
+# antithetic estimate and var
+est_anti <- mean(w_i)
+var_anti <- var(w_i) / 5000
+
+# A.2 var
+v_a2 <- runif(10000, 0, 20)
+draws_a2 <- h(v_a2)
+var_a2 <- var(draws_a2) / 10000
+
+# percent var reduction
+pct_reduction <- (1 - var_anti / var_a2) * 100
+
+c(Antithetic_Estimate = est_anti,
+  Var_Antithetic_Estimator = var_anti,
+  Var_A2_Estimator = var_a2,
+  Percent_Reduction = pct_reduction)
+```
+
+
+### B.2
+
+Importance sampling for $\E{X}$. The $U(0, 50)$ envelope in A.3 ignores
+where $x f(x)$ puts its mass. Consider envelopes of the form $Y = 50 B'$
+with $B' \sim \text{Beta}(\alpha, \beta)$, which by A.1 has density
+$g(y) = \frac{1}{50}\,\texttt{dbeta}(y/50, \alpha, \beta)$ on $[0, 50]$
+--- the uniform is the special case $\alpha = \beta = 1$.
+
+Propose **two** candidate $(\alpha, \beta)$ pairs with small integer
+values. Useful facts: a Beta($\alpha, \beta$) with $\alpha, \beta > 1$ has
+its mode at $(\alpha - 1)/(\alpha + \beta - 2)$, and plotting candidates
+against the target is the way to choose:
+
+```{r eval = FALSE}
+curve(x * fmod(x), from = 0, to = 50)
+curve(K * dbeta(x / 50, alpha, beta) / 50, add = TRUE, col = "red")
+## pick K so the two curves have comparable height
+
+```
+
+For each candidate (10,000 draws each), estimate $\E{X}$ and the variance
+of the estimator, and compare with the uniform envelope of A.3.
+
+One choice of small integers $(\alpha, \beta)$ turns out to be **perfect**:
+every weighted value $y \, f(y) / g(y)$ is the same number. Find it (the
+mode-matching hint leads straight there), and verify by printing the
+`range()` of your weighted values. Compare session exercise 3(e).
+
+```{r}
+# Candidate 1: Beta(3,3) scaled [mode = 25]
+# Candidate 2: Beta(4,3) scaled [mode = 30]
+
+run_is <- function(alpha, beta_param, n = 10000) {
+  y <- 50 * rbeta(n, alpha, beta_param)
+  target <- y * fmod(y)
+  proposal <- dbeta(y / 50, alpha, beta_param) / 50
+  weights <- target / proposal
+  
+  c(Estimate = mean(weights), 
+    Est_Var = var(weights) / n, 
+    Sample_Var = var(weights))
+}
+
+res_33 <- run_is(3, 3)
+res_43 <- run_is(4, 3)
+
+# Perfect Envelope Discovery: Beta(5,4)
+# Mode matching: (alpha - 1)/(alpha + beta - 2) = 4/7 leads to alpha = 5, beta = 4.
+# Proof: x * (x/50)^3 * (1 - x/50)^3 = 50 * (x/50)^4 * (1 - x/50)^3 (exact Beta(5,4) kernel)
+y_perf <- 50 * rbeta(10000, 5, 4)
+weights_perf <- (y_perf * fmod(y_perf)) / (dbeta(y_perf / 50, 5, 4) / 50)
+
+# Verification
+range(weights_perf)
+# [1] 25 25  (Variance is exactly 0)
+```
+
+
+### B.3
+
+Using the estimated variance of your best **non-perfect** envelope from
+B.2, compute the number of draws needed for a 95\% confidence interval for
+$\E{X}$ with width at most $0.1$ cm. Then run it once with that $n$ and
+report the realized interval and its width.
+
+```{r}
+### B.3 Fast & Fully Vectorized Sample Size Determination
+
+target_se <- 0.001  
+N_pilot <- 100000
+
+set.seed(123)
+
+# 1. Pilot single-draw variances
+x_std <- 50 * rbeta(N_pilot, 4, 4)
+var_std <- var(x_std <= 20)
+
+u_half <- runif(N_pilot / 2)
+x_u1 <- 50 * qbeta(u_half, 4, 4)
+x_u2 <- 50 * qbeta(1 - u_half, 4, 4)
+var_anti_pair <- var(0.5 * ((x_u1 <= 20) + (x_u2 <= 20)))
+
+x_is <- runif(N_pilot, 0, 20)
+w_x  <- ((1/50) * dbeta(x_is / 50, 4, 4)) / (1 / 20)
+var_is <- var(w_x)
+
+# 2. Required Draws (N)
+N_req_std  <- ceiling(var_std / (target_se^2))
+N_req_anti <- ceiling(2 * var_anti_pair / (target_se^2))
+N_req_is   <- ceiling(var_is / (target_se^2))
+
+# 3. Fast Vectorized Empirical Verification (B = 200 repetitions)
+set.seed(456)
+B_verify <- 200
+
+# (a) Standard MC
+std_mat <- matrix(50 * rbeta(N_req_std * B_verify, 4, 4) <= 20, nrow = N_req_std)
+se_emp_std <- sd(colMeans(std_mat))
+
+# (b) Antithetic Variates
+u_mat <- matrix(runif((N_req_anti / 2) * B_verify), nrow = N_req_anti / 2)
+anti_mat <- 0.5 * ((50 * qbeta(u_mat, 4, 4) <= 20) + (50 * qbeta(1 - u_mat, 4, 4) <= 20))
+se_emp_anti <- sd(colMeans(anti_mat))
+
+# (c) Importance Sampling
+is_mat <- matrix(runif(N_req_is * B_verify, 0, 20), nrow = N_req_is)
+w_mat  <- ((1/50) * dbeta(is_mat / 50, 4, 4)) / (1 / 20)
+se_emp_is <- sd(colMeans(w_mat))
+
+# 4. Results Table
+b3_results <- data.frame(
+  Method = c("Standard MC", "Antithetic Variates", "Importance Sampling"),
+  Single_Draw_Var = c(var_std, var_anti_pair * 2, var_is),
+  Required_Draws_N = c(N_req_std, N_req_anti, N_req_is),
+  Target_SE = rep(target_se, 3),
+  Empirical_SE = round(c(se_emp_std, se_emp_anti, se_emp_is), 5)
+)
+
+b3_results
+```
+
+
+# Part C: Monte Carlo for estimation
+
+Sampling from the model is one line --- scale draws from `rbeta`:
+
+```{r}
+rmod <- function(n) { 50 * rbeta(n, 4, 4) }
+```
+
+So far $\text{Beta}(4,4)$ was handed to you. Now we estimate it. Keep the
+upper limit $\theta = 50$ fixed and keep the symmetry, so the model has a
+**single unknown parameter** $a$:
+$$X = 50 B, \qquad B \sim \text{Beta}(a, a).$$
+Our working model is the case $a = 4$.
+
+### C.1
+
+**Method of moments.** Using
+$\Var{B} = \frac{\alpha\beta}{(\alpha+\beta)^2(\alpha+\beta+1)}$, show that
+$$Var{X} = \frac{625}{2a + 1},$$
+and hence that setting $\Var{X} = S^2$ and solving gives
+$$\tilde a = \frac{1}{2}\left(\frac{625}{S^2} - 1\right).$$
+Compute $\tilde a$ for the 56 perch.
+
+Note there is no second equation to solve: $\E{X} = 25$ for every $a$, so
+the mean carries no information about the parameter and the variance has to
+do all the work.
+
+**Solving for Var(X): **
+
+$Var(X) = Var(50B) = 50^2Var(B) = 2500 * \frac{a^2}{(2a)^2(2a+1)} = \frac{2500}{4(2a+1)} = \frac{625}{(2a+1)}$
+
+**Setting Var(X) = S^2**
+
+$S^2 = \frac{625}{2a + 1} => 2a + 1 = \frac{625}{S^2} => \tilde a = \frac{1}{2}(\frac{625}{S^2}-1)$
+
+```{r}
+### C.1 Method of Moments Estimate (MoM) for Perch Data
+
+# 1. Extract observed perch lengths
+x_perch <- perch$length1
+
+# 2. Compute sample statistics
+n_obs  <- length(x_perch)
+x_bar  <- mean(x_perch)
+s2_obs <- var(x_perch)
+
+# 3. Method of Moments formula: Var(X) = 625 / (2a + 1)  =>  a_tilde = (625 / S^2 - 1) / 2
+a_tilde <- (625 / s2_obs - 1) / 2
+
+# 4. Return results as a structured list
+c1_results <- list(
+  Sample_Size = n_obs,
+  Sample_Mean = x_bar,
+  Sample_Variance = s2_obs,
+  MoM_Estimate_a = a_tilde
+)
+
+c1_results
+```
+
+
+### C.2
+
+**Maximum likelihood.** Here the beta function finally earns its keep.
+Setting $\alpha = \beta = a$ in the density from the setting,
+$$f_B(u) = \frac{1}{\mathrm{B}(a, a)}\, u^{a - 1} (1 - u)^{a - 1},$$
+and dividing by 50 for the scaling (A.1), gives the model's density. With
+$u_i = x_i / 50$, show that the log-likelihood is
+$$\ell(a) = -n \log 50 - n \log \mathrm{B}(a,a)
+ + (a - 1) \sum_{i=1}^n \left[\log u_i + \log(1 - u_i)\right],$$
+where $\mathrm{B}$ is the beta function (`beta()` in R, `lbeta()` for its
+log). Conclude that the data enters **only** through the single number
+$T = \sum_i [\log u_i + \log(1-u_i)]$.
+
+Unlike the $U(0,\theta)$ maximum in video 3, this likelihood is smooth in $a$, so
+here you may differentiate. Either solve $\ell'(a) = 0$ numerically with
+`uniroot` (you will need $\frac{d}{da}\log\Gamma(a) = \psi(a)$, which is
+`digamma()` in R), or maximize $\ell$ directly with `optimize`. Report
+$\hat a$ and compare it with $\tilde a$ from C.1.
+
+```{r}
+### C.2 Maximum Likelihood Estimation (MLE) via Sufficient Statistic T
+
+# 1. Extract perch lengths and scale to standard Beta domain [0, 1]
+x_perch <- perch$length1
+n_obs   <- length(x_perch)
+b_perch <- x_perch / 50
+
+# 2. Compute the Sufficient Statistic T = sum(log(B_i) + log(1 - B_i))
+T_stat <- sum(log(b_perch) + log(1 - b_perch))
+
+# 3. Define the Score Function S(a) = d/da log L(a)
+# log L(a) = n * lgamma(2a) - 2n * lgamma(a) + (a - 1) * T
+score_fn <- function(a) {
+  2 * n_obs * digamma(2 * a) - 2 * n_obs * digamma(a) + T_stat
+}
+
+# 4. Find MLE a_hat by solving Score(a) = 0
+mle_fit <- uniroot(score_fn, interval = c(0.1, 50))
+a_hat   <- mle_fit$root
+
+# 5. Log-likelihood function value at MLE
+log_lik_val <- n_obs * lgamma(2 * a_hat) - 2 * n_obs * lgamma(a_hat) + (a_hat - 1) * T_stat
+
+# 6. Structured Output
+c2_results <- list(
+  Sample_Size = n_obs,
+  Sufficient_Statistic_T = T_stat,
+  MLE_Estimate_a = a_hat,
+  Score_At_MLE = score_fn(a_hat),
+  Log_Likelihood = log_lik_val
+)
+
+c2_results
+```
+
+
+### C.3
+
+Now pretend we do not know $F(20)$ and must estimate it from a sample of
+$n = 56$. Two estimators:
+
+- **ECDF**: $\hat F(20) = \frac{1}{56} \sum_i \ind(X_i \le 20)$
+- **Plug-in**: estimate $a$ by the method of moments from C.1, then use the
+  exact CDF form from A.1: `pbeta(20/50, atilde, atilde)`.
+
+Simulate the sampling distribution of each: 1,000 replications of samples
+of size 56 from the model ($a = 4$). Using the exact $F(20)$ from A.1,
+estimate the **bias** and **MSE** of each, with a 99\% confidence interval,
+and show a side-by-side boxplot.
+
+```{r}
+# 1. Setup & True Reference Value
+exact_F20 <- pbeta(20 / 50, 4, 4)
+reps <- 1000
+n <- 56
+
+ecdf_ests   <- numeric(reps)
+plugin_ests <- numeric(reps)
+
+# 2. Simulation Loop
+for (i in 1:reps) {
+  sample_x <- 50 * rbeta(n, 4, 4)
+  
+  # Estimator 1: ECDF
+  ecdf_ests[i] <- mean(sample_x <= 20)
+  
+  # Estimator 2: Plug-in (Method of Moments)
+  s2 <- var(sample_x)
+  a_tilde <- max(0.5 * (625 / s2 - 1), 0.01) # Protect against extreme non-positive values
+  plugin_ests[i] <- pbeta(20 / 50, a_tilde, a_tilde)
+}
+
+# 3. Helper Function for Formatted Metrics with 99% CIs
+get_metrics <- function(ests, true_val) {
+  bias_vals <- ests - true_val
+  mse_vals  <- (ests - true_val)^2
+  
+  b_ci <- t.test(bias_vals, conf.level = 0.99)$conf.int
+  m_ci <- t.test(mse_vals,  conf.level = 0.99)$conf.int
+  
+  data.frame(
+    Mean_Est   = mean(ests),
+    Bias       = mean(bias_vals),
+    Bias_99_CI = sprintf("[%.4f, %.4f]", b_ci[1], b_ci[2]),
+    MSE        = mean(mse_vals),
+    MSE_99_CI  = sprintf("[%.5f, %.5f]", m_ci[1], m_ci[2])
+  )
+}
+
+# 4. Display Table
+results_df <- rbind(
+  ECDF    = get_metrics(ecdf_ests, exact_F20),
+  Plug_in = get_metrics(plugin_ests, exact_F20)
+)
+
+print(results_df)
+
+# 5. Side-by-Side Boxplot Visualization
+boxplot(ecdf_ests, plugin_ests,
+        names = c("ECDF Estimator", "Plug-in Estimator"),
+        main = expression("Sampling Distributions of " * hat(F)(20) * " vs " * tilde(F)(20) * " (n = 56)"),
+        ylab = expression("Estimated Probability " * F(20)),
+        col  = c("skyblue", "palegreen"),
+        border = "darkgrey",
+        outline = TRUE)
+
+# Red dashed reference line for exact theoretical truth
+abline(h = exact_F20, col = "firebrick", lty = 2, lwd = 2)
+legend("topright", legend = c(paste0("Exact F(20) = ", round(exact_F20, 4))),
+       col = "firebrick", lty = 2, lwd = 2, bty = "n")
+```
+
+
+### C.4
+
+Repeat the comparison at $n = 14$ and $n = 224$. Present bias, variance,
+and MSE for both estimators at all three sample sizes in one table.
+
+```{r}
+sample_sizes <- c(14, 56, 224)
+reps <- 1000
+
+summary_list <- list()
+
+for (n_val in sample_sizes) {
+  e_ests <- numeric(reps)
+  p_ests <- numeric(reps)
+  
+  for (i in 1:reps) {
+    sx <- 50 * rbeta(n_val, 4, 4)
+    e_ests[i] <- mean(sx <= 20)
+    
+    s2_val <- var(sx)
+    a_sim <- max(0.5 * (625 / s2_val - 1), 0.01)
+    p_ests[i] <- pbeta(20 / 50, a_sim, a_sim)
+  }
+  
+  summary_list[[paste0("n=", n_val)]] <- data.frame(
+    n = n_val,
+    Method = c("ECDF", "Plug-in"),
+    Bias = c(mean(e_ests) - exact_F20, mean(p_ests) - exact_F20),
+    Variance = c(var(e_ests), var(p_ests)),
+    MSE = c(mean((e_ests - exact_F20)^2), mean((p_ests - exact_F20)^2))
+  )
+}
+
+c4_table <- do.call(rbind, summary_list)
+rownames(c4_table) <- NULL
+print(c4_table)
+```
+
+
+### C.5
+
+The $t$ confidence interval is exact only for Normal data, and the model is
+not Normal. Estimate its true coverage: simulate 10,000 samples of size 56
+from the model, compute the nominal 95\% `t.test` interval for $\E{X}$ in
+each, and report the proportion covering the true value (from A.3), with a
+99\% confidence interval for that proportion (`binom.test`).
+
+Then check your A.5 answer by direct sampling: estimate $P(X_1 + X_2 > 70)$
+as the mean of indicators over 100,000 `rmod` pairs, with a 99\%
+`binom.test` interval.
+
+```{r}
+# 1. Nominal 95% t.test Coverage Check
+sim_coverage <- replicate(10000, {
+  x_sample <- 50 * rbeta(56, 4, 4)
+  tt <- t.test(x_sample)
+  (tt$conf.int[1] <= 25) && (25 <= tt$conf.int[2])
+})
+
+covered_count <- sum(sim_coverage)
+coverage_res  <- binom.test(covered_count, 10000, conf.level = 0.99)
+
+# 2. Direct Model Sampling for P(X1 + X2 > 70)
+rmod <- function(n) { 50 * rbeta(n, 4, 4) }
+
+x1 <- rmod(100000)
+x2 <- rmod(100000)
+joint_success <- sum((x1 + x2) > 70)
+
+joint_res <- binom.test(joint_success, 100000, conf.level = 0.99)
+
+# Output Results
+list(
+  t_test_Coverage = coverage_res$estimate,
+  Coverage_99_CI  = coverage_res$conf.int,
+  Direct_Joint_P  = joint_res$estimate,
+  Joint_P_99_CI   = joint_res$conf.int
+)
+```
+
+
+# Part D: Monte Carlo for testing
+
+Part C estimated $a$. Now we **test** it. Throughout, $H_0$ says the perch
+follow our working model,
+$$H_0: \; X = 50B, \quad B \sim \text{Beta}(4, 4),$$
+with $n = 56$, and the alternatives are other values of $a$.
+
+Two statistics:
+
+- **Moment statistic** $T_S = S^2$, the sample variance. Under the model the
+  variance is $625/(2a + 1)$ from C.1, so $T_S$ is a direct read on $a$.
+- **Distance statistic** $T_K$, the largest gap between the model CDF and
+  the empirical CDF --- `ks.test(x/50, "pbeta", 4, 4)$statistic`. It looks
+  at the whole distribution rather than at $a$ in particular.
+
+Neither has a usable table here, which is why we simulate.
+
+### D.1
+
+Simulate the null distribution of each statistic: 10,000 samples of size 56
+from the model with $a = 4$.
+
+$T_S$ can be wrong in either direction, so use a **two-sided** region,
+rejecting when $T_S$ falls below the 2.5\% quantile or above the 97.5\%
+quantile. $T_K$ is a distance, so reject only above its 95\% quantile.
+Report all three cutoffs.
+
+```{r}
+set.seed(123)
+k <- 10000
+n <- 56
+
+# 1. Generate Null Samples under H0 (a = 4)
+null_x_samples <- replicate(k, 50 * rbeta(n, 4, 4), simplify = FALSE)
+
+# 2. Helper function for KS statistic
+ktest <- function(sample) {
+  ks.test(sample / 50, "pbeta", 4, 4)$statistic
+}
+
+# 3. Compute statistics using purrr::map_dbl()
+null_var <- map_dbl(null_x_samples, var)
+null_ks  <- map_dbl(null_x_samples, ktest)
+
+# 4. Extract Cutoffs
+ts_cutoffs <- quantile(null_var, probs = c(0.025, 0.975))
+tk_cutoff  <- quantile(null_ks,  probs = 0.95)
+
+c(TS_Lower = ts_cutoffs[1], TS_Upper = ts_cutoffs[2], TK_Cutoff = tk_cutoff)
+
+```
+
+
+### D.2
+
+With **fresh** simulations under $H_0$ (10,000 new replications), estimate
+the empirical Type I error rate of each region, each with a `binom.test`
+confidence interval.
+
+```{r}
+# Fresh Null Samples
+fresh_null_samples <- replicate(k, 50 * rbeta(n, 4, 4), simplify = FALSE)
+
+fresh_var <- map_dbl(fresh_null_samples, var)
+fresh_ks  <- map_dbl(fresh_null_samples, ktest)
+
+# Calculate empirical rejection rates
+ts_type1 <- mean(fresh_var < ts_cutoffs[1] | fresh_var > ts_cutoffs[2])
+tk_type1 <- mean(fresh_ks > tk_cutoff)
+
+# Binomial test confirmation
+binom_ts <- binom.test(sum(fresh_var < ts_cutoffs[1] | fresh_var > ts_cutoffs[2]), k)
+binom_tk <- binom.test(sum(fresh_ks > tk_cutoff), k)
+
+data.frame(
+  Test = c("T_S (Variance)", "T_K (KS Distance)"),
+  Empirical_Type1 = c(ts_type1, tk_type1),
+  CI_95_Lower = c(binom_ts$conf.int[1], binom_tk$conf.int[1]),
+  CI_95_Upper = c(binom_ts$conf.int[2], binom_tk$conf.int[2])
+)
+```
+
+
+### D.3
+
+Power curves. For each $a \in \{2, 2.5, 3, 3.5, \ldots, 8\}$, simulate
+1,500 samples of size 56 from $50 \cdot \text{Beta}(a, a)$ and estimate the
+power of both tests, using the cutoffs from D.1.
+
+Plot the two power curves on one set of axes, with horizontal reference
+lines at $0.05$ and $0.80$.
+
+```{r}
+a_grid <- seq(2.0, 8.0, by = 0.5)
+m_sims <- 1500
+
+power_var <- numeric(length(a_grid))
+power_ks  <- numeric(length(a_grid))
+
+for (j in seq_along(a_grid)) {
+  a_val <- a_grid[j]
+  
+  # Symmetric Beta(a, a) alternatives
+  alt_samples <- replicate(m_sims, 50 * rbeta(n, a_val, a_val), simplify = FALSE)
+  
+  alt_var <- map_dbl(alt_samples, var)
+  alt_ks  <- map_dbl(alt_samples, ktest)
+  
+  power_var[j] <- mean(alt_var < ts_cutoffs[1] | alt_var > ts_cutoffs[2])
+  power_ks[j]  <- mean(alt_ks > tk_cutoff)
+}
+
+# Power Plot
+plot(a_grid, power_var, type = "b", pch = 19, col = "blue", lwd = 2,
+     ylim = c(0, 1), xlab = "Shape Parameter (a)", ylab = "Power",
+     main = "Power Curves: T_S (Variance) vs T_K (KS Distance)")
+
+lines(a_grid, power_ks, type = "b", pch = 17, col = "red", lwd = 2, lty = 2)
+abline(h = 0.05, col = "black", lty = 3)
+abline(h = 0.80, col = "darkgreen", lty = 3)
+abline(v = 4.0,  col = "grey", lty = 2)
+
+legend("right", legend = c("T_S (Variance)", "T_K (KS Distance)"),
+       col = c("blue", "red"), pch = c(19, 17), lty = c(1, 2), lwd = 2)
+```
+
+
+### D.4
+
+**(a)** Test $H_0: a = 4$ on the 56 perch lengths using $T_S$. Report the
+observed $S^2$, its $p$-value in the $(1 + \#)/(B + 1)$ form, and whether
+the test rejects at the $0.05$ level.
+
+**(b)** Invert that test to get a confidence interval for $a$. For each
+candidate $a_0$ on a grid from $1.5$ to $8$ in steps of $0.1$:
+
+- simulate the null distribution of $T_S$ under
+  $50 \cdot \text{Beta}(a_0, a_0)$, 2,000 replications;
+- keep $a_0$ if the observed $S^2$ falls between the $2.5\%$ and $97.5\%$
+  quantiles of that distribution.
+
+The kept values form a 95\% confidence interval for $a$. Report its
+endpoints, and plot the grid against the $p$-value with $\tilde a$ from C.1
+and the working value $a = 4$ marked.
+
+```{r}
+# 1. Test H0: a = 4 on observed perch sample variance
+s2_obs <- var(perch$length1)
+
+mean_null_var <- mean(null_var)
+more_extreme   <- sum(abs(null_var - mean_null_var) >= abs(s2_obs - mean_null_var))
+p_val_obs      <- (1 + more_extreme) / (k + 1)
+
+test_passed <- (s2_obs >= ts_cutoffs[1]) && (s2_obs <= ts_cutoffs[2])
+verdict     <- if (test_passed) "FAIL TO REJECT H0 (Model fit PASSED)" else "REJECT H0 (Model fit FAILED)"
+
+# 2. Inversion for 95% CI on parameter 'a' over a grid
+set.seed(321)
+a_candidates <- seq(1.5, 8.0, by = 0.1)
+B_grid <- 2000
+
+kept_a <- c()
+p_vals_grid <- numeric(length(a_candidates))
+
+for (idx in seq_along(a_candidates)) {
+  a0 <- a_candidates[idx]
+  
+  # Simulate sample variances under candidate a0
+  sim_vars <- map_dbl(1:B_grid, function(i) var(50 * rbeta(n, a0, a0)))
+  
+  q_low  <- quantile(sim_vars, 0.025)
+  q_high <- quantile(sim_vars, 0.975)
+  
+  # Keep candidate if observed variance falls within standard 95% acceptance region
+  if (s2_obs >= q_low && s2_obs <= q_high) {
+    kept_a <- c(kept_a, a0)
+  }
+  
+  # Two-sided Monte Carlo p-value under a0
+  mean_sim <- mean(sim_vars)
+  p_vals_grid[idx] <- (1 + sum(abs(sim_vars - mean_sim) >= abs(s2_obs - mean_sim))) / (B_grid + 1)
+}
+
+ci_lower <- min(kept_a)
+ci_upper <- max(kept_a)
+
+# 3. Generate D.4 Visualization Plot
+plot(a_candidates, p_vals_grid, type = "l", lwd = 2.5, col = "navy",
+     xlab = expression("Candidate Shape Parameter (" * a[0] * ")"),
+     ylab = "Monte Carlo p-value",
+     main = "D.4: Test Inversion for 95% Confidence Interval of Parameter 'a'",
+     ylim = c(0, 1.05))
+
+# Alpha = 0.05 cutoff line
+abline(h = 0.05, col = "firebrick", lty = 2, lwd = 2)
+
+# Reference lines
+abline(v = 4.0, col = "orange", lty = 3, lwd = 2)        # H0 working model
+abline(v = a_tilde, col = "darkgreen", lty = 2, lwd = 2) # Method of Moments estimate
+
+# Confidence interval boundaries
+abline(v = c(ci_lower, ci_upper), col = "purple", lty = 4, lwd = 1.5)
+
+# Highlight valid 95% CI region along the curve
+polygon(c(ci_lower, a_candidates[a_candidates >= ci_lower & a_candidates <= ci_upper], ci_upper),
+        c(0, p_vals_grid[a_candidates >= ci_lower & a_candidates <= ci_upper], 0),
+        col = rgb(0.1, 0.2, 0.8, 0.1), border = NA)
+
+legend("topright",
+       legend = c("p-value curve",
+                  expression("Alpha = 0.05 Cutoff"),
+                  expression("Working H0: " * a == 4.0),
+                  expression("MM Estimate: " * tilde(a)),
+                  paste0("Inverted 95% CI: [", ci_lower, ", ", ci_upper, "]")),
+       col = c("navy", "firebrick", "orange", "darkgreen", "purple"),
+       lty = c(1, 2, 3, 2, 4),
+       lwd = c(2.5, 2, 2, 2, 1.5),
+       bty = "n", cex = 0.85)
+
+# 4. Report all results together at the end
+d4_results <- list(
+  Observed_Variance = s2_obs,
+  Acceptance_Region_95 = c(Lower = unname(ts_cutoffs[1]), Upper = unname(ts_cutoffs[2])),
+  P_Value_H0 = p_val_obs,
+  Verdict = verdict,
+  Inverted_95_CI_a = c(Lower = ci_lower, Upper = ci_upper)
+)
+
+d4_results
+```
+
