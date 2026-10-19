@@ -1,0 +1,1031 @@
+---
+title: "Module 2 Project: Writing Samplers"
+author: "Antonio Monteiro, amonteir"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+set.seed(20260929)
+library(tidyverse)
+```
+
+\newcommand{\E}[1]{\text{E}\left(#1\right)}
+\newcommand{\Var}[1]{\text{Var}\left(#1\right)}
+
+# Directions
+
+These 5 sections follow the 5 substantive parts of Module 2 - Generation. Complete each section, including the appropriate output.
+This document will be used on the exam. For any question make sure to display any requested output. If you use any AI assistance in implementing the R code, be prepared to explain how the implementation works.
+ 
+Helpful hint: remember to knit the document periodically to make sure the project can be knit prior to printing out your paper copy before the exam.
+
+# Part A: Inversion
+
+## A.1
+
+The generator
+$$x_{k+1} = 65539\, x_k \bmod 2^{31}, \qquad u_k = x_k / 2^{31},$$
+is called RANDU.
+
+Write `randu(seed, n)`, which returns $x_1, \ldots, x_n$ starting from
+$x_0 = {}$`seed`. The mod operator in R is `%%`.
+
+```{r}
+randu_one <- function(seed) {
+  (65539 * seed) %% 2^31
+}
+
+randu_ints <- function(seed, n) {
+  xs <- numeric(n)
+  for (i in 1:n) {
+    seed <- randu_one(seed)
+    xs[i] <- seed
+  }
+  xs
+}
+```
+
+
+(a) Print $x_1, \ldots, x_{10}$ for seed 406. What do all ten have in common?
+
+```{r}
+options(digits = 22)
+randu_ints(406, 10)
+```
+
+They are all even, realistically 50% should be odd. Depending on the seed, every
+number will either be even or odd.
+
+(b) Make a QQ plot of $u_1, \ldots, u_{30000}$ against $U(0, 1)$.
+
+```{r}
+randu <- function(seed, n) {
+  xs <- randu_ints(seed, n)
+  xs / 2^31
+}
+
+u30k <- randu(406, 30000)
+
+ggplot(tibble(u = u30k),
+       aes(sample = u)) +
+  geom_qq(distribution = qunif) +
+  geom_abline(intercept = 0, slope = 1, color= "red")
+```
+
+
+(c) The function below groups draws into consecutive triples
+$(u_1, u_2, u_3), (u_4, u_5, u_6), \ldots$ and plots them as points in the
+unit cube. Run it on your 30,000 RANDU draws and on 30,000 draws from
+`runif`. How do the two plots differ?
+
+```{r plot-triples}
+plot_triples <- function(u) {
+  m <- matrix(u, ncol = 3, byrow = TRUE)
+  colnames(m) <- c("x", "y", "z")
+  lattice::cloud(z ~ x + y, data = as.data.frame(m), pch = 20, cex = 0.1)
+}
+
+plot_triples(u30k)
+plot_triples(runif(30000))
+```
+
+## A.2
+
+`airquality$Wind` holds 153 daily average wind speeds (mph) at LaGuardia
+Airport, May to September 1973. We model wind speed with the **log-logistic**
+distribution, which has scale $\alpha > 0$, shape $\beta > 0$ and CDF
+$$F(x) = \frac{1}{1 + (x / \alpha)^{-\beta}}, \qquad x > 0.$$
+R has no functions for this distribution.
+
+(a) Find the quantile function $Q(u)$, and write `rllogis(n, alpha, beta)`.
+Check 10,000 draws with $\alpha = 10$ and $\beta = 5$ with a QQ plot against
+your $Q$, as in video 1. `geom_qq` passes extra parameters to the quantile
+function through `dparams`, for example
+`geom_qq(distribution = qllogis, dparams = list(alpha = 10, beta = 5))`.
+
+$$F(x) = \frac{1}{(1+x/\alpha)^{-\beta}} = u$$
+
+$$Q(u) = \alpha(\frac{u}{1 - u})^{1/\beta}$$
+```{r}
+# Define the quantile function for the Log-Logistic distribution
+qllogis <- function(p, alpha, beta) {
+  alpha * (p / (1 - p))^(1 / beta)
+}
+
+# Define the inversion random number generator
+rllogis <- function(n, alpha, beta) {
+  u <- runif(n)
+  qllogis(u, alpha, beta)
+}
+
+# Generate 10,000 draws with alpha = 10 and beta = 5
+draws_llogis <- rllogis(10000, alpha = 10, beta = 5)
+
+# Create the Q-Q plot against theoretical quantiles
+ggplot(tibble(x = draws_llogis), aes(sample = x)) +
+  geom_qq(distribution = qllogis, dparams = list(alpha = 10, beta = 5)) +
+  geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+  labs(
+    title = "Q-Q Plot of rllogis Draws vs. Theoretical Log-Logistic Quantiles",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  ) +
+  theme_minimal()
+```
+
+
+(b) The method of moments (module 1) estimates parameters by setting the
+model's moments equal to the sample's and solving. **Quantile matching** does
+the same with quantiles. With $\hat q_p$ the sample $p$ quantile
+(`quantile(x, p)`), solve
+$$Q(1/2) = \hat q_{0.5}, \qquad Q(3/4) = \hat q_{0.75}$$
+for $\alpha$ and $\beta$. This gives the estimators $\hat\alpha$ and
+$\hat\beta$. Hint: start with $Q(1/2)$, then divide the second equation by
+the first.
+Compute them for the wind data. Then compare the fitted model's
+probability of a day above 15 mph with the fraction of days above 15 mph in
+the data.
+
+$$Q(0.5) = \alpha \left( \frac{0.5}{1 - 0.5} \right)^{1/\beta} = \alpha (1)^{1/\beta} = \alpha \implies \hat{\alpha} = \hat{q}_{0.5}$$
+
+$$Q(0.75) = \alpha \left( \frac{0.75}{1 - 0.75} \right)^{1/\beta} = \alpha (3)^{1/\beta} = \hat{q}_{0.75}$$
+
+$$\frac{\hat{q}_{0.75}}{\hat{q}_{0.5}} = 3^{1/\beta}$$
+
+$$\log\left(\frac{\hat{q}_{0.75}}{\hat{q}_{0.5}}\right) = \frac{1}{\beta} \log(3) \implies \hat{\beta} = \frac{\log(3)}{\log(\hat{q}_{0.75} / \hat{q}_{0.5})}$$
+
+```{r}
+# Extract wind speed data (153 daily observations)
+wind_data <- airquality$Wind
+
+# Compute sample quantiles
+q50 <- quantile(wind_data, 0.50)
+q75 <- quantile(wind_data, 0.75)
+
+# Compute parameter estimates
+hat_alpha <- as.numeric(q50)
+hat_beta <- as.numeric(log(3) / log(q75 / q50))
+
+cat(sprintf("Fitted alpha (scale): %.4f\n", hat_alpha))
+cat(sprintf("Fitted beta  (shape): %.4f\n\n", hat_beta))
+
+# Model probability of a day exceeding 15 mph: P(X > 15) = 1 - F(15)
+# F(x) = 1 / (1 + (x / alpha)^(-beta))
+model_prob_gt15 <- 1 - (1 / (1 + (15 / hat_alpha)^(-hat_beta)))
+
+# Sample fraction of days exceeding 15 mph
+sample_frac_gt15 <- mean(wind_data > 15)
+
+cat(sprintf("Model probability P(X > 15): %.4f\n", model_prob_gt15))
+cat(sprintf("Sample fraction  P(X > 15): %.4f\n", sample_frac_gt15))
+```
+
+(c) Simulate 1,000 samples of size 153 from the fitted model. Estimate the
+bias and MSE of $\hat\beta$, each with a 99% confidence interval.
+
+```{r}
+# Parameter values from Part A.2(b)
+alpha_true <- as.numeric(quantile(airquality$Wind, 0.50))
+beta_true <- as.numeric(log(3) / log(quantile(airquality$Wind, 0.75) / alpha_true))
+
+M <- 1000
+n <- 153
+
+beta_hats <- numeric(M)
+
+for (i in 1:M) {
+  # 1. Simulate a sample of size n from the log-logistic model
+  sample_x <- rllogis(n, alpha_true, beta_true)
+  
+  # 2. Re-estimate beta via quantile matching
+  q50_sim <- quantile(sample_x, 0.50)
+  q75_sim <- quantile(sample_x, 0.75)
+  
+  beta_hats[i] <- as.numeric(log(3) / log(q75_sim / q50_sim))
+}
+
+# --- Point Estimates ---
+bias_hat <- mean(beta_hats) - beta_true
+mse_hat <- mean((beta_hats - beta_true)^2)
+
+# --- 99% Confidence Intervals ---
+# 1. CI for Bias: bias_hat +/- z_0.005 * SE(bias)
+se_bias <- sd(beta_hats) / sqrt(M)
+z_99 <- qnorm(0.995)
+
+ci_bias <- bias_hat + c(-1, 1) * z_99 * se_bias
+
+# 2. CI for MSE: using sample standard deviation of squared errors
+sq_errors <- (beta_hats - beta_true)^2
+se_mse <- sd(sq_errors) / sqrt(M)
+
+ci_mse <- mse_hat + c(-1, 1) * z_99 * se_mse
+
+# --- Display Output ---
+cat(sprintf("True Beta: %.4f\n\n", beta_true))
+
+cat(sprintf("Estimated Bias: %.4f\n", bias_hat))
+cat(sprintf("99%% CI for Bias: [%.4f, %.4f]\n\n", ci_bias[1], ci_bias[2]))
+
+cat(sprintf("Estimated MSE : %.4f\n", mse_hat))
+cat(sprintf("99%% CI for MSE : [%.4f, %.4f]\n", ci_mse[1], ci_mse[2]))
+```
+
+
+## A.3
+
+`discoveries` counts the great inventions and scientific discoveries in each
+year from 1860 to 1959.
+
+```{r discoveries}
+d <- as.numeric(discoveries)
+table(d)
+```
+
+(a) The Poisson($\lambda$) PMF is
+$$p(x) = \frac{\lambda^x e^{-\lambda}}{x!}, \qquad x = 0, 1, 2, \ldots,$$
+which `dpois(x, lambda)` computes. Write `rpois_inv(n, lambda)`, which draws
+Poisson($\lambda$) values by inversion: tabulate the CDF
+$F(x) = \sum_{i=0}^{x} p(i)$, then for each $u$ find the smallest
+$x$ with $F(x) \ge u$. Do not use `rpois` or `qpois`. Check 10,000 draws with
+$\lambda = 3.1$ against `dpois(0:10, 3.1)`.
+
+```{r}
+# Custom Poisson generator via Inversion
+rpois_inv <- function(n, lambda) {
+  # Choose a safe upper bound M for CDF tabulation (lambda + 10 * sqrt(lambda))
+  max_x <- ceiling(lambda + 10 * sqrt(lambda) + 20)
+  
+  # Tabulate PMF and CDF
+  pmf <- dpois(0:max_x, lambda)
+  cdf <- cumsum(pmf)
+  
+  # Draw uniforms and invert via interval matching
+  u <- runif(n)
+  findInterval(u, cdf) # Returns 0-indexed count x
+}
+
+# Check 10,000 draws with lambda = 3.1
+set.seed(20260929)
+n_draws <- 10000
+lam <- 3.1
+draws_pois <- rpois_inv(n_draws, lam)
+
+# Compare sample probabilities against theoretical PMF dpois(0:10, 3.1)
+observed_props <- prop.table(table(factor(draws_pois, levels = 0:10)))
+theoretical_pmf <- dpois(0:10, lam)
+
+comparison_df <- tibble(
+  x = 0:10,
+  Theoretical = theoretical_pmf,
+  Sample = as.numeric(observed_props)
+)
+
+print(comparison_df)
+```
+
+
+(b) A Poisson variable has variance equal to its mean, so for Poisson counts
+$S^2 / \bar X$ should be near 1. Compute it for `discoveries`. Simulate its
+null distribution from 5,000 samples of size 100 drawn with `rpois_inv` at
+$\lambda = \bar X$, and report the Monte Carlo $p$-value for the alternative
+that the variance exceeds the mean.
+
+```{r}
+d <- as.numeric(discoveries)
+n_obs <- length(d)
+
+# Observed statistic
+xbar_obs <- mean(d)
+s2_obs <- var(d)
+T_obs <- s2_obs / xbar_obs
+
+# Simulate null distribution from 5,000 samples of size 100
+M_sims <- 5000
+T_sims <- numeric(M_sims)
+
+set.seed(20260929)
+for (i in 1:M_sims) {
+  sim_sample <- rpois_inv(n_obs, lambda = xbar_obs)
+  T_sims[i] <- var(sim_sample) / mean(sim_sample)
+}
+
+# Monte Carlo p-value for the upper-tailed test
+p_value <- mean(T_sims >= T_obs)
+
+cat(sprintf("Observed Mean (Xbar): %.4f\n", xbar_obs))
+cat(sprintf("Observed Variance (S^2): %.4f\n", s2_obs))
+cat(sprintf("Observed Dispersion Ratio (S^2 / Xbar): %.4f\n\n", T_obs))
+cat(sprintf("Monte Carlo p-value (H1: Variance > Mean): %.4f\n", p_value))
+```
+
+
+# Part B: Transformations and mixtures
+
+## B.1
+
+Let $X$ and $Y$ be independent $N(0, 1)$, and write the point $(X, Y)$ in
+polar coordinates: radius $R = \sqrt{X^2 + Y^2}$ and angle $A$, so that
+$X = R \cos A$ and $Y = R \sin A$.
+
+(a) Show that $R^2$ is exponential with rate $1/2$. You may use that
+$\chi^2(2)$ is the exponential distribution with mean 2.
+
+The square of a Normal RV follows a chi-squared distribution with one degree
+of freedom. Sum of squares adds degrees of freedom $\chi^2(2)$. Using
+the PDF of chi-squared gives us $(1/2)e^((-1/2))v$ which is exp(1/2).
+
+(b) Take as given that $A \sim U(0, 2\pi)$, independent of $R$. Use the
+exponential quantile function from video 1 to show that for independent
+$U_1, U_2 \sim U(0, 1)$,
+$$\sqrt{-2 \log U_1} \, \cos(2 \pi U_2) \sim N(0, 1).$$
+
+- We know (a), that $R^2 \sim \text{Exp}(1/2)$
+- How could we generate $R^2 = W$? If we know the quantile function $W$ 
+is $-2 \log(1 - u)$, so to generate $W$ we draw $U_1 \sim U(0,1)$ and
+$$-2 \log(1 - U_1) \sim \text{Exp}(1/2)$$ 
+also $1 - U_1$ is uniform so:
+$$-2 \log(1 - U_1) \sim \text{Exp}(1/2)$$ 
+
+Conclude $R = \sqrt{-2 \log U_1}$
+
+Now how to get $A$? From Inversion Method Lecture,
+A's quantile function is $Q_A(u) = 2 \pi u$, so
+$2 \pi U_2 = A$
+
+Combined: $\sqrt{-2 \log U_1} \times \cos(2 \pi U_2)$
+$= X \sim N(0,1)$
+
+
+(c) Implement this as `rnorm_bm(n)`. Check 10,000 draws with a QQ plot, and
+estimate $P(X > 2)$ with a 95% confidence interval. Compare with `pnorm(-2)`.
+
+```{r}
+# Function to generate standard normal draws using Box-Muller
+rnorm_bm <- function(n) {
+  m <- ceiling(n / 2)
+  u1 <- runif(m)
+  u2 <- runif(m)
+  
+  r <- sqrt(-2 * log(u1))
+  theta <- 2 * pi * u2
+  
+  x1 <- r * cos(theta)
+  x2 <- r * sin(theta)
+  
+  # Return exactly n samples
+  c(x1, x2)[1:n]
+}
+
+# Generate 10,000 draws
+draws <- rnorm_bm(10000)
+
+# 1. Check distributional fit with a QQ plot
+qqnorm(draws, main = "Q-Q Plot of rnorm_bm Draws")
+qqline(draws, col = "red", lwd = 2)
+
+# 2. Estimate P(X > 2) and compute a 95% Confidence Interval
+p_hat <- mean(draws > 2)
+n_obs <- length(draws)
+se <- sqrt(p_hat * (1 - p_hat) / n_obs)
+
+ci_lower <- p_hat - 1.96 * se
+ci_upper <- p_hat + 1.96 * se
+
+# 3. Theoretical value P(X > 2) = P(X < -2) = pnorm(-2)
+p_true <- pnorm(-2)
+
+# Print results
+cat(sprintf("Estimated P(X > 2): %.4f\n", p_hat))
+
+cat(sprintf("95%% CI: [%.4f, %.4f]\n", ci_lower, ci_upper))
+
+cat(sprintf("Theoretical P(X > 2) [pnorm(-2)]: %.4f\n", p_true))
+```
+
+## B.2
+
+A **zero-inflated Poisson** (ZIP) is zero with some extra probability and
+otherwise Poisson. With a latent $W \sim \text{Bernoulli}(\theta)$
+independent of $X \sim \text{Poisson}(\lambda)$, let $Y = WX$.
+
+(a) Write `rzip(n, theta, lambda)` from this representation. Use `rpois` for
+$X$.
+
+```{r}
+rzip <- function(n, theta, lambda) {
+  w <- rbinom(n, size=1, prob=theta)
+  x <- rpois(n, lambda)
+  w * x
+}
+```
+
+
+(b) The method of moments estimators are
+$$\hat \lambda = \frac{S^2 + \bar Y^2}{\bar Y} - 1, \qquad
+  \hat \theta = 1 - \frac{S^2 - \bar Y}{S^2 + \bar Y^2 - \bar Y}.$$
+Fit the ZIP to `discoveries`. How many of the 100 years does the fitted model
+expect to have no discoveries, and how many did?
+
+```{r}
+d <- as.numeric(discoveries)
+n_obs <- length(d)
+
+# Sample moments
+y_bar <- mean(d)
+s2 <- var(d)
+
+# Method of Moments Estimators
+hat_lambda <- (s2 + y_bar^2) / y_bar - 1
+hat_theta  <- 1 - (s2 - y_bar) / (s2 + y_bar^2 - y_bar)
+
+# Model's expected probability of zero count: P(Y = 0) = theta + (1 - theta) * exp(-lambda)
+p_zero_fitted <- hat_theta + (1 - hat_theta) * exp(-hat_lambda)
+
+# Expected zero counts out of 100 years
+expected_zeros <- n_obs * p_zero_fitted
+
+# Actual observed zeros
+observed_zeros <- sum(d == 0)
+
+cat(sprintf("Fitted Lambda : %.4f\n", hat_lambda))
+cat(sprintf("Fitted Theta  : %.4f\n\n", hat_theta))
+
+cat(sprintf("Expected Zeros (Model) : %.2f years\n", expected_zeros))
+cat(sprintf("Observed Zeros (Data)  : %d years\n", observed_zeros))
+```
+
+
+(c) Simulate 2,000 samples of size 100 from the fitted ZIP, and give a Monte
+Carlo $p$-value for the observed number of zeros. The alternative is that
+there are fewer zeros than the model predicts.
+
+```{r}
+M_sims <- 2000
+sim_zeros <- numeric(M_sims)
+
+# Simulate 2,000 samples of size 100 from the fitted ZIP model
+for (i in 1:M_sims) {
+  sim_data <- rzip(100, theta = hat_theta, lambda = hat_lambda)
+  sim_zeros[i] <- sum(sim_data == 0)
+}
+
+# Monte Carlo p-value for the alternative: fewer zeros than predicted
+p_value_zeros <- mean(sim_zeros <= observed_zeros)
+
+cat(sprintf("Observed Zeros: %d\n", observed_zeros))
+cat(sprintf("Mean Simulated Zeros: %.2f\n", mean(sim_zeros)))
+cat(sprintf("Monte Carlo p-value (H1: fewer zeros than predicted): %.4f\n", p_value_zeros))
+```
+
+
+# Part C: Accept-reject and importance resampling
+
+The standard Laplace density is $g(x) = \frac{1}{2} e^{-|x|}$. Video 3 samples
+it by inversion:
+
+```{r rlaplace}
+rlaplace <- function(n) {
+  u <- runif(n)
+  ifelse(u < 1/2, log(2 * u), -log(2 - 2 * u))
+}
+```
+
+## C.1
+
+(a) Find with pen and paper the smallest $c$ such that $c \, g(x) \ge \phi(x)$
+for all $x$, where $\phi$ is the standard normal density. Treat $x \ge 0$ and
+$x < 0$ separately.
+
+$$\log \frac{e^{-x^2/2}/ \sqrt{2\pi}}{(1/2)e^{-x}} = \log
+\left(\frac{2}{\sqrt{2\pi}} \cdot e^{-x^{2}/2 + x} \right)$$
+
+$$\log (2/\sqrt{2\pi)} + \log (e^{-x^{2}/2 + x})$$
+
+$$\log (2/\sqrt{2\pi)} + \frac{-x^2}{2}+x$$
+
+Derivative: $$-x+1$$
+
+$c = \phi(x)/g(x)$? $$\frac{2e^{1/2}}{\sqrt{2\pi}} = \sqrt{\frac{2e}{\pi}} = ~1.3155$$
+
+(b) Use accept-reject with 10,000 Laplace candidates to draw standard
+normals. Check the accepted draws with a QQ plot. Report the acceptance rate
+with a 95% confidence interval, and compare it with $1/c$.
+
+```{r c1b}
+c_lap <- sqrt(2 * exp(1) / pi)                  # in R, e is exp(1)
+y <- rlaplace(10000)
+keep <- runif(10000) <= dnorm(y) / (c_lap * (exp(-abs(y)) / 2))   # c times g(y)
+z <- y[keep]
+
+# your QQ plot of z here
+ggplot(tibble(z), aes(sample = z)) + geom_qq(distribution=qnorm) + 
+  geom_abline(intercept=0,slope=1,color="red")
+
+mean(keep)                          # acceptance rate
+1 / c_lap
+t.test(as.numeric(keep))$conf.int   # 95% interval for the acceptance rate
+```
+
+## C.2
+
+Let $f(x) \propto f^*(x) = \sin(\pi x^2)$ on $0 < x < 1$. Neither method
+below needs the normalizing constant.
+
+```{r fstar}
+fstar <- function(x) sin(pi * x^2)
+curve(fstar(x), from = 0, to = 1)
+```
+
+(a) Use accept-reject with a $U(0, 1)$ envelope and 10,000 candidates. Since
+$f^* \le 1$, accept a candidate $Y$ when $U \le f^*(Y)$.
+
+```{r}
+fstar <- function(x) sin(pi * x^2)
+
+# --- (a) Accept-Reject Sampler using a U(0, 1) Envelope ---
+set.seed(20260929)
+
+n_target_ar <- 10000
+ar_draws <- numeric(n_target_ar)
+count <- 0
+total_candidates <- 0
+
+while (count < n_target_ar) {
+  y <- runif(1)
+  total_candidates <- total_candidates + 1
+  
+  # Accept candidate Y if U <= f*(Y) / envelope (envelope = 1)
+  if (runif(1) <= fstar(y)) {
+    count <- count + 1
+    ar_draws[count] <- y
+  }
+}
+
+# Acceptance rate check
+ar_acc_rate <- n_target_ar / total_candidates
+cat(sprintf("Accept-Reject Acceptance Rate: %.2f%%\n", ar_acc_rate * 100))
+```
+
+
+(b) Use importance resampling. Draw 10,000 new $U(0, 1)$ candidates, normalize
+the weights $f^*(Y_i)$, and resample 5,000 draws with
+`sample(..., replace = TRUE, prob = ...)`.
+
+```{r}
+# --- (b) Sampling Importance Resampling (SIR) ---
+set.seed(20260929)
+
+n_candidates_sir <- 10000
+n_resample_sir <- 5000
+
+# 1. Draw 10,000 proposal candidates from U(0, 1)
+y_sir <- runif(n_candidates_sir)
+
+# 2. Compute unnormalized weights w_i = f*(y_i) / g(y_i) [g(y) = 1]
+weights_sir <- fstar(y_sir)
+
+# 3. Resample 5,000 draws with replacement using normalized weights
+sir_draws <- sample(y_sir, size = n_resample_sir, replace = TRUE, prob = weights_sir)
+```
+
+(c) Estimate $\E{X}$ from each sample, and check both against the exact
+value from `integrate`.
+
+```{r}
+# --- (c) Estimate E[X] from both samples and compare against integrate() ---
+
+# 1. Estimate E[X] from Monte Carlo samples
+E_ar  <- mean(ar_draws)
+E_sir <- mean(sir_draws)
+
+# 2. Compute exact E[X] using R's integrate()
+# E[X] = integral(x * f*(x)) / integral(f*(x))
+num_int <- integrate(function(x) x * fstar(x), lower = 0, upper = 1)$value
+den_int <- integrate(fstar, lower = 0, upper = 1)$value
+E_exact <- num_int / den_int
+
+# 3. Print side-by-side comparison
+results <- tibble(
+  Method = c("Exact (integrate)", "Accept-Reject", "Importance Resampling"),
+  Estimate_E_X = c(E_exact, E_ar, E_sir),
+  Sample_Size = c(NA, length(ar_draws), length(sir_draws))
+)
+
+print(results)
+```
+
+
+# Part D: Multivariate distributions and processes
+
+## D.1
+
+`faithful` records 272 eruptions of the Old Faithful geyser: the eruption
+length and the waiting time to the next eruption, both in minutes.
+
+```{r faithful}
+ggplot(faithful, aes(x = eruptions, y = waiting)) + geom_point()
+```
+
+We model the pair as a mixture of two bivariate normals: with probability
+$p$ a draw from $N_2(\mu_1, \Sigma_1)$, and otherwise a draw from
+$N_2(\mu_2, \Sigma_2)$.
+
+(a) Split the eruptions at 3 minutes. Estimate $p$ as the fraction of short
+eruptions, and each component's mean and covariance from its group
+(`colMeans`, `cov`).
+
+```{r d1}
+short <- faithful$eruptions < 3
+p <- mean(short)
+shortdf <- faithful[short, ]
+longdf <- faithful[!short, ]
+mu1 <- colMeans(faithful[short, ]);  S1 <- cov(faithful[short, ])
+mu2 <- colMeans(faithful[!short, ]);  S2 <- cov(faithful[!short, ])
+
+rmvn <- function(n, mu, Sigma) {
+  C <- chol(Sigma)
+  Z <- matrix(rnorm(2 * n), nrow = 2)
+  t(mu + t(C) %*% Z)                # mu + C^T Z, one draw per column
+}
+
+simulated_lower <- rmvn(1000, mu1, S1)
+ggplot(simulated_lower,
+       aes(x = eruptions, y = waiting)) +
+  geom_point()
+
+rfaithful <- function(n) {
+  n1 <- rbinom(1, n, p)                  # how many short eruptions
+  x <- rbind(rmvn(n1, mu1, S1), rmvn(n - n1, mu2, S2))
+  colnames(x) <- c("eruptions", "waiting")
+  x
+}
+
+# your plot of the data next to rfaithful(272) here
+
+p
+mu1["waiting"]                           # mean wait after a short eruption
+```
+
+(b) Write `rfaithful(n)`, which draws from the fitted mixture. Generate each
+normal component as $\mu + C^T Z$ with `C <- chol(Sigma)`, not with a package
+function. Plot 272 simulated points next to the data.
+
+```{r}
+# 1. Generate 272 draws from the fitted mixture model
+simulated_df <- as.data.frame(rfaithful(272)) %>% 
+  mutate(Source = "Simulated (rfaithful)")
+
+observed_df <- faithful %>% 
+  mutate(Source = "Observed (faithful)")
+
+# 2. Combine into a single data frame for side-by-side plotting
+combined_df <- bind_rows(observed_df, simulated_df)
+
+# 3. Create side-by-side scatter plots
+ggplot(combined_df, aes(x = eruptions, y = waiting, color = Source)) +
+  geom_point(alpha = 0.7, size = 1.8) +
+  facet_wrap(~ Source) +
+  scale_color_manual(values = c("Observed (faithful)" = "#2b5c8f", 
+                                "Simulated (rfaithful)" = "#d95f02")) +
+  labs(
+    title = "Old Faithful Geyser: Observed Data vs. Mixture Simulation",
+    x = "Eruption Duration (minutes)",
+    y = "Waiting Time to Next Eruption (minutes)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+## D.2
+
+(a) Show that the mean of the mixture is $p \mu_1 + (1 - p) \mu_2$.
+
+$$\E{X} = \E{WU} + \E{(1 - W)V} = \E{W}\,\E{U} + \E{(1-W)} \E{V} = 
+p  \mu_1 + (1 - p) \mu_2$$
+
+(b) Compare three covariance matrices: `cov(faithful)`, the covariance of
+10,000 draws from `rfaithful`, and $p \Sigma_1 + (1 - p) \Sigma_2$. Is the
+covariance of a mixture the weighted average of the component covariances?
+
+```{r d2b}
+cov(faithful)
+cov(rfaithful(10000))
+p * S1 + (1 - p) * S2
+```
+
+## D.3
+
+`data/spy.rda` holds the daily closing price of SPY, a fund that tracks the
+S&P 500, for 3,488 trading days from 2007 to 2020. Prices are adjusted for
+dividends and splits.
+
+```{r spy}
+load("../../data/spy.rda")
+logp <- log(spy$price)
+r <- diff(logp)
+ggplot(spy, aes(x = date, y = price)) + geom_line()
+```
+
+A simple model for the log price $L_t$ is a Gaussian random walk,
+$L_t = L_{t-1} + \mu + \sigma Z_t$ with independent $Z_t \sim N(0, 1)$. Under
+this model the daily log returns $r_t = L_t - L_{t-1}$ are independent
+$N(\mu, \sigma^2)$.
+
+(a) Estimate $\mu$ and $\sigma$ from the returns. Write `rwalk()`, which
+simulates a log price path of the same length as the data from the fitted
+walk, starting at the first observed $L_t$. Plot 20 simulated paths with the
+observed one.
+
+```{r}
+# --- Part D.3(a): Return Estimation & Path Simulation ---
+# 1. Calculate log returns and parameters
+spy_prices <- spy$price
+log_prices <- log(spy_prices)
+r_t <- diff(log_prices)
+
+n_days <- length(spy_prices)
+mu_hat <- mean(r_t)
+sigma_hat <- sd(r_t)
+
+# Function to simulate a single random walk path
+rwalk <- function(n, start_log_price, mu, sigma) {
+  increments <- rnorm(n - 1, mean = mu, sd = sigma)
+  c(start_log_price, start_log_price + cumsum(increments))
+}
+
+# 2. Simulate 20 paths
+n_sims_plot <- 20
+sim_paths <- replicate(n_sims_plot, rwalk(n_days, log_prices[1], mu_hat, sigma_hat))
+
+# 3. Plot 20 simulated paths alongside actual SPY log prices
+plot(1:n_days, log_prices, type = "l", col = "black", lwd = 2.5,
+     ylim = range(c(log_prices, sim_paths)),
+     xlab = "Trading Days", ylab = "Log(SPY Price)",
+     main = "SPY Observed Log Prices vs. 20 Random Walk Simulations")
+
+for (i in 1:n_sims_plot) {
+  lines(1:n_days, sim_paths[, i], col = rgb(0.8, 0.2, 0.2, 0.3), lwd = 1.2)
+}
+
+legend("topleft", legend = c("Observed SPY", "Simulated Paths"),
+       col = c("black", "red"), lwd = c(2.5, 1.2), bty = "n")
+```
+
+
+(b) The **largest drawdown** is the biggest fall from an earlier peak,
+$\min_t \left(L_t - \max_{s \le t} L_s\right)$. `cummax` computes the running
+peak. Compute the largest drawdown for the data, and give a Monte Carlo
+$p$-value from 1,000 simulated paths. The alternative is that real
+drawdowns are larger (more negative) than the model's.
+
+```{r}
+# --- Part D.3(b): Maximum Drawdown Test ---
+max_drawdown <- function(L) {
+  min(L - cummax(L))
+}
+
+# Observed statistic
+D_obs <- max_drawdown(log_prices)
+
+# Monte Carlo simulation (1,000 runs)
+M_sims <- 1000
+D_sims <- numeric(M_sims)
+
+for (i in 1:M_sims) {
+  path <- rwalk(n_days, log_prices[1], mu_hat, sigma_hat)
+  D_sims[i] <- max_drawdown(path)
+}
+
+# Monte Carlo p-value for lower-tailed test (more negative drawdown)
+p_val_drawdown <- mean(D_sims <= D_obs)
+
+cat(sprintf("Observed Max Drawdown (Log Scale) : %.4f\n", D_obs))
+cat(sprintf("Mean Simulated Max Drawdown        : %.4f\n", mean(D_sims)))
+cat(sprintf("Monte Carlo p-value (H1: D* <= D_obs): %.4f\n", p_val_drawdown))
+```
+
+
+(c) Repeat (b) with the correlation between $|r_t|$ and $|r_{t-1}|$ as the
+statistic. It is large when big moves follow big moves. The alternative is
+that it is larger than under the model.
+
+```{r}
+# --- Part D.3(c): Volatility Clustering Test ---
+set.seed(20260929)
+
+calc_vol_cluster <- function(returns) {
+  cor(abs(returns[-1]), abs(returns[-length(returns)]))
+}
+
+# Observed statistic
+C_obs <- calc_vol_cluster(r_t)
+
+# Monte Carlo simulation (1,000 runs)
+C_sims <- numeric(M_sims)
+
+for (i in 1:M_sims) {
+  sim_r <- rnorm(n_days - 1, mean = mu_hat, sd = sigma_hat)
+  C_sims[i] <- calc_vol_cluster(sim_r)
+}
+
+# Monte Carlo p-value for upper-tailed test
+p_val_vol <- mean(C_sims >= C_obs)
+
+cat(sprintf("Observed Absolute Return Autocorrelation (C_obs) : %.4f\n", C_obs))
+cat(sprintf("Mean Simulated Autocorrelation                    : %.4f\n", mean(C_sims)))
+cat(sprintf("Monte Carlo p-value (H1: C* >= C_obs)             : %.4f\n", p_val_vol))
+```
+
+
+(d) Which feature of the data does the random walk reproduce, and which does
+it miss?
+
+**What the Random Walk Captures Well**: 
+
+It effectively reproduces the overall trajectory (drift $\hat{\mu}$) and general volatility scale ($\hat{\sigma}$) of stock prices over long time horizons.
+
+**Where the Random Walk Fails**:
+
+Drawdown Severity: Real financial markets exhibit prolonged market crashes that produce significantly deeper drawdowns ($D_{\text{obs}}$) than expected under independent Gaussian returns.
+
+Volatility Clustering: Real returns show significant positive autocorrelation in absolute returns ($C_{\text{obs}} > 0$), meaning quiet periods cluster together and high-volatility periods cluster together—a dynamic that the independent Gaussian model completely misses ($C^* \approx 0$).
+
+# Part E: Gibbs sampling
+
+A Morning Consult/Politico poll asked voters whether Congress should raise the
+federal minimum wage. Leaving out those with no opinion:
+
+```{r poll}
+x1 <- 806  # raise it to $15/hr
+x2 <- 435  # do not raise it
+x3 <- 586  # raise it to $11/hr
+```
+
+We model the counts as multinomial with probabilities $\theta_1, \theta_2$ and
+$\theta_3 = 1 - \theta_1 - \theta_2$:
+$$f(x_1, x_2, x_3 \mid \theta_1, \theta_2) \propto
+  \theta_1^{x_1} \theta_2^{x_2} (1 - \theta_1 - \theta_2)^{x_3}.$$
+The prior is Dirichlet($\delta_1, \delta_2, \delta_3$), which generalizes the
+Beta to three probabilities that sum to 1:
+$$p(\theta_1, \theta_2) \propto
+  \theta_1^{\delta_1 - 1} \theta_2^{\delta_2 - 1} (1 - \theta_1 - \theta_2)^{\delta_3 - 1}.$$
+
+## E.1
+
+(a) Show that the posterior is Dirichlet($x_1 + \delta_1, x_2 + \delta_2, x_3 + \delta_3$).
+
+$$\theta_1^{x_1} \theta_2^{x_2} (1 - \theta_1 - \theta_2)^{x_3} \cdot
+  \theta_1^{\delta_1 - 1} \theta_2^{\delta_2 - 1} (1 - \theta_1 - \theta_2)^{\delta_3 - 1}
+  = \theta_1^{e_1 - 1}\, \theta_2^{e_2 - 1}\, (1 - \theta_1 - \theta_2)^{e_3 - 1}$$
+  
+$e_1 = x_1 + \delta_1$, $e_2 = x_2 + \delta_2$ and $e_3 = x_3 + \delta_3$
+
+$$\pi(\theta_1, \theta_2 \mid x_1,
+x_2, x_3) \propto \theta_1^{x_1 + \delta_1 - 1}\, 
+\theta_2^{x_2 + \delta_2 - 1}\,
+(1 - \theta_1 - \theta_2)^{x_3 + \delta_3 - 1}$$
+
+(b) Show that the full conditional of $\theta_1$ is a scaled Beta,
+$$\theta_1 \mid \theta_2, x \sim (1 - \theta_2) \, \text{Beta}(x_1 + \delta_1, \, x_3 + \delta_3),$$
+and state the matching result for $\theta_2 \mid \theta_1, x$. Hint: if
+$X = aB$ with $a > 0$, then $f_X(x) = f_B(x/a)/a$ (module 1 project, A.1).
+
+Let $a_1 = x_1 + \delta_1$, $b = x_3 + \delta_3$ and $s = 1 - \theta_2$.
+Keeping only the factors with $\theta_1$,
+$\pi(\theta_1 \mid \theta_2, x) \propto \theta_1^{a_1 - 1} (s - \theta_1)^{b - 1}$
+for $0 < \theta_1 < s$. For $B \sim \text{Beta}(a_1, b)$, the density of $sB$ is
+$$\frac{1}{s} f_B\!\left(\frac{\theta_1}{s}\right) \propto
+  \left(\frac{\theta_1}{s}\right)^{a_1 - 1} \left(1 - \frac{\theta_1}{s}\right)^{b - 1}
+  \propto \text{(blank)}$$
+  
+$$\left(\frac{\theta_1}{s}\right)^{a_1 - 1} \left(s - \frac{\theta_1}{s}\right)^{b - 1}=
+\left(\frac{\theta_1^{a_1-1}}{s^{a_1-1}}\right) \left(\frac{(s-\theta_1)^{b-1}}{s^{b-1}}\right)
+\propto \theta_1^{a_1-1}(1-\theta_2-\theta_1)^{b-1}$$
+
+## E.2
+
+Write a Gibbs sampler that alternates the two full conditionals from E.1,
+with every $\delta_i = 1$. Run 5,000 iterations starting from
+$\theta_1 = \theta_2 = 1/3$, make a trace plot of $\theta_1$ and $\theta_2$,
+and discard the first 1,000. Report the posterior mean and a 95% credible
+interval (the 2.5% and 97.5% quantiles of the draws) for $\theta_1$,
+$\theta_2$ and $\theta_3$, and estimate $P(\theta_1 / \theta_2 > 2 \mid x)$.
+
+```{r e2}
+gibbs <- function(k, t1 = 1/3, t2 = 1/3) {
+  chain <- matrix(0, k, 2, dimnames = list(NULL, c("theta1", "theta2")))
+  for (i in 1:k) {
+    t1 <- (1 - t2) * rbeta(1, x1 + 1, x3 + 1)
+    t2 <- (1 - t1) * rbeta(1, x2 + 1, x3 + 1)
+    chain[i, ] <- c(t1, t2)
+  }
+  chain
+}
+chain <- gibbs(5000)
+matplot(chain, type = "l", lty = 1)          # trace plot
+post <- chain[-(1:1000), ]
+post <- cbind(post, theta3 = 1 - post[, "theta1"] - post[, "theta2"])
+rbind(mean = colMeans(post), apply(post, 2, quantile, c(0.025, 0.975)))
+mean(post[, "theta1"] / post[, "theta2"] > 2)
+```
+
+## E.3
+
+If $G_1, G_2, G_3$ are independent with $G_i \sim \text{Gamma}(a_i, 1)$, then
+$(G_1, G_2, G_3) / (G_1 + G_2 + G_3)$ is Dirichlet($a_1, a_2, a_3$). With two
+components this is the Beta: $G_1 / (G_1 + G_2) \sim \text{Beta}(a_1, a_2)$.
+
+The same construction gives the marginal posterior of $\theta_1$. Write
+$\theta_1 = G_1 / (G_1 + H)$ with $H = G_2 + G_3$. A sum of independent
+gammas with the same rate is gamma, so $H \sim \text{Gamma}(a_2 + a_3, 1)$,
+independent of $G_1$, and therefore
+$\theta_1 \mid x \sim \text{Beta}(a_1, a_2 + a_3)$.
+
+Both results involve a Beta, but they are different distributions:
+
+| | distribution | used by |
+|---|---|---|
+| full conditional $\theta_1 \mid \theta_2, x$ | $(1 - \theta_2)\,\text{Beta}(a_1, a_3)$ | the Gibbs sampler in E.2 |
+| marginal $\theta_1 \mid x$ | $\text{Beta}(a_1, a_2 + a_3)$ | the check below |
+
+The conditional depends on the current value of $\theta_2$, and the marginal
+does not. The Gibbs sampler needs only the conditionals. We use the marginal
+here to check the chain.
+
+Draw 4,000 values from the posterior directly with the gamma construction.
+Make QQ plots of the direct draws of $\theta_1$ and of the Gibbs draws of
+$\theta_1$ against the Beta($a_1, a_2 + a_3$) quantile function (`qbeta`, with
+the shape parameters passed through `dparams` as in A.2), and compare
+the two estimates of $P(\theta_1 / \theta_2 > 2 \mid x)$.
+
+```{r}
+# =============================================================================
+# PART E.3: Validation of Gibbs Sampler via Direct Gamma Sampling
+# =============================================================================
+
+# Define posterior hyper-parameters vector 'a' (with prior delta = (1, 1, 1))
+a <- c(x1 + 1, x2 + 1, x3 + 1)
+
+# Generate 4,000 direct draws using Gamma construction
+set.seed(20260929)
+n_direct <- 4000
+g1 <- rgamma(n_direct, shape = a[1], rate = 1)
+g2 <- rgamma(n_direct, shape = a[2], rate = 1)
+g3 <- rgamma(n_direct, shape = a[3], rate = 1)
+
+g_sum <- g1 + g2 + g3
+direct <- cbind(
+  theta1 = g1 / g_sum,
+  theta2 = g2 / g_sum,
+  theta3 = g3 / g_sum
+)
+
+# --- Part E.3(a): Q-Q Plots using geom_qq with dparams -----------------------
+
+shape1_param <- a[1]
+shape2_param <- a[2] + a[3]
+
+# Data frame combining direct and Gibbs draws for ggplot
+qq_df <- bind_rows(
+  tibble(theta1 = direct[, "theta1"], Method = "Direct Gamma Sampling"),
+  tibble(theta1 = post[, "theta1"],   Method = "Gibbs Sampler")
+)
+
+ggplot(qq_df, aes(sample = theta1)) +
+  geom_qq(
+    distribution = qbeta,
+    dparams = list(shape1 = shape1_param, shape2 = shape2_param),
+    color = "#2b5c8f",
+    alpha = 0.6
+  ) +
+  geom_qq_line(
+    distribution = qbeta,
+    dparams = list(shape1 = shape1_param, shape2 = shape2_param),
+    color = "red",
+    linetype = "dashed"
+  ) +
+  facet_wrap(~ Method) +
+  labs(
+    title = "Q-Q Plot of theta1 Draws vs. Theoretical Beta(a1, a2 + a3)",
+    x = "Theoretical Quantiles",
+    y = "Sample Quantiles"
+  ) +
+  theme_minimal()
+
+# --- Part E.3(b): Comparative Posterior Probability P(theta1 / theta2 > 2 | x)
+
+prob_direct <- mean((direct[, "theta1"] / direct[, "theta2"]) > 2)
+prob_gibbs  <- mean((post[, "theta1"] / post[, "theta2"]) > 2)
+
+results_e3 <- tibble(
+  Method = c("Direct Gamma Draws", "Gibbs Sampler"),
+  P_Theta1_gt_2Theta2 = c(prob_direct, prob_gibbs)
+)
+
+print(results_e3)
+```
+
